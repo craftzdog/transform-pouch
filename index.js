@@ -39,6 +39,18 @@ exports.transform = exports.filter = function transform(config) {
     }
     return doc;
   };
+  var incomingAttachment = function (data) {
+    if (config.incomingAttachment) {
+      return config.incomingAttachment(data);
+    }
+    return doc;
+  };
+  var outgoingAttachment = function (doc) {
+    if (config.outgoingAttachment) {
+      return config.outgoingAttachment(doc);
+    }
+    return doc;
+  };
 
   var handlers = {};
 
@@ -196,6 +208,19 @@ exports.transform = exports.filter = function transform(config) {
     };
     return changes;
   };
+
+  handlers.getAttachment = function (orig) {
+    return orig().then(function (data) {
+      return outgoingAttachment(data);     
+    })
+  };
+
+  handlers.putAttachment = function (orig) {
+    return orig().then(function (data) {
+      return incomingAttachment(data);     
+    })
+  };
+
   wrappers.installWrapperMethods(db, handlers);
 };
 

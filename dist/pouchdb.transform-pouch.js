@@ -1,4 +1,4 @@
-(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+(function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -38,6 +38,18 @@ exports.transform = exports.filter = function transform(config) {
   var outgoing = function (doc) {
     if (!isUntransformable(doc) && config.outgoing) {
       return config.outgoing(utils.clone(doc));
+    }
+    return doc;
+  };
+  var incomingAttachment = function (data) {
+    if (config.incomingAttachment) {
+      return config.incomingAttachment(data);
+    }
+    return doc;
+  };
+  var outgoingAttachment = function (doc) {
+    if (config.outgoingAttachment) {
+      return config.outgoingAttachment(doc);
     }
     return doc;
   };
@@ -121,6 +133,30 @@ exports.transform = exports.filter = function transform(config) {
     });
   };
 
+  handlers.bulkGet = function (orig) {
+    return orig().then(function (res) {
+      var none = {};
+      return utils.Promise.all(res.results.map(function (result) {
+        if (result.id && result.docs && Array.isArray(result.docs)) {
+          return {
+            docs: result.docs.map(function(doc) {
+              if (doc.ok) {
+                return {ok: outgoing(doc.ok)};
+              } else {
+                return doc;
+              }
+            }),
+            id: result.id
+          };
+        } else {
+          return none;
+        }
+      })).then(function (results) {
+        return {results: results};
+      });
+    });
+  };
+  
   handlers.changes = function (orig) {
     function modifyChange(change) {
       if (change.doc) {
@@ -133,10 +169,13 @@ exports.transform = exports.filter = function transform(config) {
     }
 
     function modifyChanges(res) {
-      return utils.Promise.all(res.results.map(modifyChange)).then(function (results) {
-        res.results = results;
-        return res;
-      });
+      if (res.results) {
+        return utils.Promise.all(res.results.map(modifyChange)).then(function (results) {
+          res.results = results;
+          return res;
+        });
+      }
+      return utils.Promise.resolve(res);
     }
 
     var changes = orig();
@@ -166,11 +205,24 @@ exports.transform = exports.filter = function transform(config) {
     var origThen = changes.then;
     changes.then = function (resolve, reject) {
       return origThen.apply(changes, [function (res) {
-        modifyChanges(res).then(resolve, reject);
+        return modifyChanges(res).then(resolve, reject);
       }, reject]);
     };
     return changes;
   };
+
+  handlers.getAttachment = function (orig) {
+    return orig().then(function (data) {
+      return outgoingAttachment(data);     
+    })
+  };
+
+  handlers.putAttachment = function (orig) {
+    return orig().then(function (data) {
+      return incomingAttachment(data);     
+    })
+  };
+
   wrappers.installWrapperMethods(db, handlers);
 };
 
@@ -813,7 +865,7 @@ exports.createWrapperMethod = function (name, original, handler, db) {
 function createWrapper(name, original, handler, theWrapperBuilders, thisVal) {
   //thisVal is optional
   var buildWrapper = theWrapperBuilders[name];
-  if (typeof createWrapper === "undefined") {
+  if (typeof buildWrapper === "undefined") {
     throw new Error("No known wrapper for method name: " + name); //coverage: ignore
   }
   var handlers = [handler];
@@ -833,15 +885,14 @@ wrapperBuilders.destroy = function (db, destroy, handlers) {
 };
 
 wrapperBuilders.put = function (db, put, handlers) {
-  return function (doc, docId, docRev, options, callback) {
+  return function (/*doc, docId, docRev, options, callback*/) {
     var args = {};
     args.base = db || this;
-    args.db = db || this; //backwards compatibility
     var argsList = Array.prototype.slice.call(arguments);
     //parsing code borrowed from PouchDB (adapted).
     args.doc = argsList.shift();
     var id = '_id' in args.doc;
-    while (true) {
+    do {
       var temp = argsList.shift();
       var temptype = typeof temp;
       if (temptype === "string" && !id) {
@@ -854,10 +905,7 @@ wrapperBuilders.put = function (db, put, handlers) {
       } else if (temptype === "function") {
         args.callback = temp;
       }
-      if (!argsList.length) {
-        break;
-      }
-    }
+    } while (argsList.length);
     args.options = args.options || {};
     return callHandlers(handlers, args, function () {
       return put.call(this, args.doc, args.options);
@@ -876,7 +924,7 @@ wrapperBuilders.post = function (db, post, handlers) {
 };
 
 wrapperBuilders.get = function (db, get, handlers) {
-  return function(docId, options, callback) {
+  return function (docId, options, callback) {
     var args = parseBaseArgs(db, this, options, callback);
     args.docId = docId;
     return callHandlers(handlers, args, function () {
@@ -913,7 +961,7 @@ wrapperBuilders.bulkDocs = function (db, bulkDocs, handlers) {
   return function (docs, options, callback) {
     var args = parseBaseArgs(db, this, options, callback);
     //support the deprecated signature.
-    if ('new_edits' in docs) {
+    if (typeof(docs) === 'object' && 'new_edits' in docs) {
       args.options.new_edits = docs.new_edits;
     }
     args.docs = docs.docs || docs;
@@ -929,6 +977,7 @@ wrapperBuilders.allDocs = function (db, allDocs, handlers) {
     return callHandlers(handlers, args, makeCallWithOptions(allDocs, args));
   };
 };
+wrapperBuilders.bulkGet = wrapperBuilders.allDocs;
 
 wrapperBuilders.changes = function (db, changes, handlers) {
   return function (options, callback) {
@@ -1025,6 +1074,29 @@ wrapperBuilders.viewCleanup = function (db, viewCleanup, handlers) {
   };
 };
 
+wrapperBuilders.createIndex = function (db, createIndex, handlers) {
+  return function (index, options, callback) {
+    var args = parseBaseArgs(db, this, options, callback);
+    args.index = index;
+    return callHandlers(handlers, args, function () {
+      return createIndex.call(this, args.index);
+    });
+  };
+};
+wrapperBuilders.deleteIndex = wrapperBuilders.createIndex;
+
+
+wrapperBuilders.find = function (db, find, handlers) {
+  return function (request, options, callback) {
+    var args = parseBaseArgs(db, this, options, callback);
+    args.request = request;
+    return callHandlers(handlers, args, function () {
+      return find.call(this, args.request);
+    });
+  };
+};
+wrapperBuilders.explain = wrapperBuilders.find;
+
 wrapperBuilders.info = function (db, info, handlers) {
   return function (options, callback) {
     //see note on the options argument at putAttachment.
@@ -1032,6 +1104,7 @@ wrapperBuilders.info = function (db, info, handlers) {
     return callHandlers(handlers, args, makeCall(info));
   };
 };
+wrapperBuilders.getIndexes = wrapperBuilders.info;
 
 wrapperBuilders.compact = function (db, compact, handlers) {
   return function (options, callback) {
@@ -1155,7 +1228,6 @@ function parseBaseArgs(thisVal1, thisVal2, options, callback) {
   }
   return {
     base: thisVal1 || thisVal2,
-    db: thisVal1 || thisVal2, //backwards compatibility
     options: options || {},
     callback: callback
   };
@@ -1233,7 +1305,6 @@ function uninstallWrappers(base, handlers) {
 
 },{"promise-nodify":9}],8:[function(require,module,exports){
 // shim for using process in browser
-
 var process = module.exports = {};
 
 // cached from whatever global is present so that test runners that stub it
@@ -1244,22 +1315,84 @@ var process = module.exports = {};
 var cachedSetTimeout;
 var cachedClearTimeout;
 
+function defaultSetTimout() {
+    throw new Error('setTimeout has not been defined');
+}
+function defaultClearTimeout () {
+    throw new Error('clearTimeout has not been defined');
+}
 (function () {
-  try {
-    cachedSetTimeout = setTimeout;
-  } catch (e) {
-    cachedSetTimeout = function () {
-      throw new Error('setTimeout is not defined');
+    try {
+        if (typeof setTimeout === 'function') {
+            cachedSetTimeout = setTimeout;
+        } else {
+            cachedSetTimeout = defaultSetTimout;
+        }
+    } catch (e) {
+        cachedSetTimeout = defaultSetTimout;
     }
-  }
-  try {
-    cachedClearTimeout = clearTimeout;
-  } catch (e) {
-    cachedClearTimeout = function () {
-      throw new Error('clearTimeout is not defined');
+    try {
+        if (typeof clearTimeout === 'function') {
+            cachedClearTimeout = clearTimeout;
+        } else {
+            cachedClearTimeout = defaultClearTimeout;
+        }
+    } catch (e) {
+        cachedClearTimeout = defaultClearTimeout;
     }
-  }
 } ())
+function runTimeout(fun) {
+    if (cachedSetTimeout === setTimeout) {
+        //normal enviroments in sane situations
+        return setTimeout(fun, 0);
+    }
+    // if setTimeout wasn't available but was latter defined
+    if ((cachedSetTimeout === defaultSetTimout || !cachedSetTimeout) && setTimeout) {
+        cachedSetTimeout = setTimeout;
+        return setTimeout(fun, 0);
+    }
+    try {
+        // when when somebody has screwed with setTimeout but no I.E. maddness
+        return cachedSetTimeout(fun, 0);
+    } catch(e){
+        try {
+            // When we are in I.E. but the script has been evaled so I.E. doesn't trust the global object when called normally
+            return cachedSetTimeout.call(null, fun, 0);
+        } catch(e){
+            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error
+            return cachedSetTimeout.call(this, fun, 0);
+        }
+    }
+
+
+}
+function runClearTimeout(marker) {
+    if (cachedClearTimeout === clearTimeout) {
+        //normal enviroments in sane situations
+        return clearTimeout(marker);
+    }
+    // if clearTimeout wasn't available but was latter defined
+    if ((cachedClearTimeout === defaultClearTimeout || !cachedClearTimeout) && clearTimeout) {
+        cachedClearTimeout = clearTimeout;
+        return clearTimeout(marker);
+    }
+    try {
+        // when when somebody has screwed with setTimeout but no I.E. maddness
+        return cachedClearTimeout(marker);
+    } catch (e){
+        try {
+            // When we are in I.E. but the script has been evaled so I.E. doesn't  trust the global object when called normally
+            return cachedClearTimeout.call(null, marker);
+        } catch (e){
+            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error.
+            // Some versions of I.E. have different rules for clearTimeout vs setTimeout
+            return cachedClearTimeout.call(this, marker);
+        }
+    }
+
+
+
+}
 var queue = [];
 var draining = false;
 var currentQueue;
@@ -1284,7 +1417,7 @@ function drainQueue() {
     if (draining) {
         return;
     }
-    var timeout = cachedSetTimeout(cleanUpNextTick);
+    var timeout = runTimeout(cleanUpNextTick);
     draining = true;
 
     var len = queue.length;
@@ -1301,7 +1434,7 @@ function drainQueue() {
     }
     currentQueue = null;
     draining = false;
-    cachedClearTimeout(timeout);
+    runClearTimeout(timeout);
 }
 
 process.nextTick = function (fun) {
@@ -1313,7 +1446,7 @@ process.nextTick = function (fun) {
     }
     queue.push(new Item(fun, args));
     if (queue.length === 1 && !draining) {
-        cachedSetTimeout(drainQueue, 0);
+        runTimeout(drainQueue);
     }
 };
 
@@ -1341,6 +1474,10 @@ process.off = noop;
 process.removeListener = noop;
 process.removeAllListeners = noop;
 process.emit = noop;
+process.prependListener = noop;
+process.prependOnceListener = noop;
+
+process.listeners = function (name) { return [] }
 
 process.binding = function (name) {
     throw new Error('process.binding is not supported');
