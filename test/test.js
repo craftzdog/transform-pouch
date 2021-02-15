@@ -689,9 +689,11 @@ function tests(dbName, dbType) {
 
     var db;
 
-    beforeEach(function () {
+    beforeEach(function (done) {
       db = new Pouch(dbName);
-      return db;
+      db.on('created', function () {
+        done();
+      });
     });
     afterEach(function () {
       return db.destroy();
