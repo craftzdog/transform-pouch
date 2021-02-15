@@ -738,12 +738,16 @@ function tests(dbName, dbType) {
           });
           return Promise.resolve(doc);
         },
-        incomingAttachment: function (docId, attachmentId, rev, attachment, type) {
-          return Promise.resolve(encrypt(attachment instanceof Buffer ? attachment.toString('utf8') : attachment));
+        incomingAttachment: function (docId, attachmentId, rev, attachment) {
+          return Promise.resolve(
+            encrypt(attachment instanceof Buffer ? attachment.toString('utf8') : attachment)
+          );
         },
-        outgoingAttachment: function (docId, attachmentId, attachment, options) {
-          const unsealed = decrypt(attachment instanceof Buffer ? attachment.toString('base64') : attachment);
-          return Promise.resolve(Buffer.from(unsealed, 'utf8'))
+        outgoingAttachment: function (docId, attachmentId, attachment) {
+          var unsealed = decrypt(
+            attachment instanceof Buffer ? attachment.toString('base64') : attachment
+          );
+          return Promise.resolve(Buffer.from(unsealed, 'utf8'));
         }
       });
     }
@@ -938,7 +942,7 @@ function tests(dbName, dbType) {
 
     it('test encryption/decryption of attachments', function () {
       transform(db);
-      const att = Buffer.from('my super secret text!', 'utf8')
+      var att = Buffer.from('my super secret text!', 'utf8');
       return db.putAttachment('doc', 'att.txt', att, 'text/plain').then(function () {
         return db.getAttachment('doc', 'att.txt');
       }).then(function (att) {
