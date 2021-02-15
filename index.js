@@ -39,9 +39,9 @@ exports.transform = exports.filter = function transform(config) {
     }
     return doc;
   };
-  var incomingAttachment = function (data) {
+  var incomingAttachment = function (doc) {
     if (config.incomingAttachment) {
-      return config.incomingAttachment(data);
+      return config.incomingAttachment(doc);
     }
     return doc;
   };
