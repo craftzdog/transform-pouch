@@ -212,13 +212,13 @@ exports.transform = exports.filter = function transform(config) {
   handlers.getAttachment = function (orig) {
     return orig().then(function (data) {
       return outgoingAttachment(data);     
-    })
+    });
   };
 
   handlers.putAttachment = function (orig) {
     return orig().then(function (data) {
       return incomingAttachment(data);     
-    })
+    });
   };
 
   wrappers.installWrapperMethods(db, handlers);
