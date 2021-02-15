@@ -689,9 +689,11 @@ function tests(dbName, dbType) {
 
     var db;
 
-    beforeEach(function () {
+    beforeEach(function (done) {
       db = new Pouch(dbName);
-      return db;
+      db.on('created', function () {
+        done();
+      });
     });
     afterEach(function () {
       return db.destroy();
@@ -722,19 +724,26 @@ function tests(dbName, dbType) {
       db.transform({
         incoming: function (doc) {
           Object.keys(doc).forEach(function (field) {
-            if (field !== '_id' && field !== '_rev') {
+            if (field !== '_id' && field !== '_rev' && field !== '_attachments') {
               doc[field] = encrypt(doc[field]);
             }
           });
-          return doc;
+          return Promise.resolve(doc);
         },
         outgoing: function (doc) {
           Object.keys(doc).forEach(function (field) {
-            if (field !== '_id' && field !== '_rev') {
+            if (field !== '_id' && field !== '_rev' && field !== '_attachments') {
               doc[field] = decrypt(doc[field]);
             }
           });
-          return doc;
+          return Promise.resolve(doc);
+        },
+        incomingAttachment: function (docId, attachmentId, rev, attachment, type) {
+          return Promise.resolve(encrypt(attachment instanceof Buffer ? attachment.toString('utf8') : attachment));
+        },
+        outgoingAttachment: function (docId, attachmentId, attachment, options) {
+          const unsealed = decrypt(attachment instanceof Buffer ? attachment.toString('base64') : attachment);
+          return Promise.resolve(Buffer.from(unsealed, 'utf8'))
         }
       });
     }
@@ -926,6 +935,20 @@ function tests(dbName, dbType) {
         });
       });
     }
+
+    it('test encryption/decryption of attachments', function () {
+      transform(db);
+      const att = Buffer.from('my super secret text!', 'utf8')
+      return db.putAttachment('doc', 'att.txt', att, 'text/plain').then(function () {
+        return db.getAttachment('doc', 'att.txt');
+      }).then(function (att) {
+        att.toString('utf8').should.equal('my super secret text!');
+        return new Pouch(dbName).get('doc', { attachments: true, binary: false });
+      }).then(function (doc) {
+        doc._attachments['att.txt'].data.should.equal(encrypt('my super secret text!'));
+      });
+    });
+
   });
 
   describe(dbType + ': replication tests', function () {

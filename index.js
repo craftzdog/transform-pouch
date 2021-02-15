@@ -39,6 +39,18 @@ exports.transform = exports.filter = function transform(config) {
     }
     return doc;
   };
+  var incomingAttachment = function (docId, attachmentId, rev, attachment, type) {
+    if (config.incomingAttachment) {
+      return config.incomingAttachment(docId, attachmentId, rev, attachment, type);
+    }
+    return attachment;
+  };
+  var outgoingAttachment = function (docId, attachmentId, attachment, options) {
+    if (config.outgoingAttachment) {
+      return config.outgoingAttachment(docId, attachmentId, attachment, options);
+    }
+    return attachment;
+  };
 
   var handlers = {};
 
@@ -196,6 +208,22 @@ exports.transform = exports.filter = function transform(config) {
     };
     return changes;
   };
+
+  handlers.getAttachment = function (orig, args) {
+    return orig().then(function (attachment) {
+      return outgoingAttachment(args.docId, args.attachmentId, attachment);
+    });
+  };
+
+  handlers.putAttachment = function (orig, args) {
+    return Promise.resolve(incomingAttachment(
+      args.docId, args.attachmentId, args.rev, args.doc, args.type
+    )).then(function (attachment) {
+      args.doc = attachment;
+      return orig();
+    });
+  };
+
   wrappers.installWrapperMethods(db, handlers);
 };
 
