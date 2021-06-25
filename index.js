@@ -2,7 +2,7 @@
 
 var Promise = require('lie');
 var utils = require('./pouch-utils');
-var wrappers = require('pouchdb-wrappers');
+var wrappers = require('@craftzdog/pouchdb-wrappers');
 var immediate = require('immediate');
 
 function isntInternalKey(key) {
